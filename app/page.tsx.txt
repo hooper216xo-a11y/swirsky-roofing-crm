@@ -1,0 +1,198 @@
+'use client';
+
+import React, { useEffect, useMemo, useState } from 'react';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+type Lead = {
+  id?: number;
+  date: string;
+  name: string;
+  phone: string;
+  city: string;
+  service: string;
+  source: string;
+  status: string;
+  value: string;
+  notes: string;
+};
+
+// Browser-safe env access for canvas + Next.js
+const env = typeof globalThis !== 'undefined' ? (globalThis as any).process?.env ?? {} : {};
+const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL || 'https://YOUR_PROJECT.supabase.co';
+const supabaseAnonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY';
+
+const hasValidSupabaseConfig =
+  supabaseUrl !== 'https://YOUR_PROJECT.supabase.co' &&
+  supabaseAnonKey !== 'YOUR_SUPABASE_ANON_KEY';
+
+const supabase: SupabaseClient | null = hasValidSupabaseConfig
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
+
+export default function Page() {
+  const createEmptyLead = (): Lead => ({
+    date: new Date().toISOString().slice(0, 10),
+    name: '',
+    phone: '',
+    city: '',
+    service: '',
+    source: 'Facebook Organic',
+    status: 'New',
+    value: '',
+    notes: '',
+  });
+
+  const [lead, setLead] = useState<Lead>(createEmptyLead());
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadLeads = async () => {
+    if (!supabase) return;
+    setLoading(true);
+    setError('');
+
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      setError(error.message);
+      setLeads([]);
+    } else {
+      setLeads((data as Lead[]) || []);
+    }
+
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!supabase) return;
+    loadLeads();
+
+    const channel = supabase
+      .channel('lead-updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeads)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const addLead = async () => {
+    if (!lead.name.trim() || !lead.phone.trim()) return;
+
+    // Fallback demo mode for canvas preview without env vars
+    if (!supabase) {
+      setLeads((prev) => [{ ...lead, id: Date.now() }, ...prev]);
+      setLead(createEmptyLead());
+      return;
+    }
+
+    const { error } = await supabase.from('leads').insert([lead]);
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    setLead(createEmptyLead());
+    loadLeads();
+  };
+
+  const totals = useMemo(() => ({
+    total: leads.length,
+    won: leads.filter((l) => l.status === 'Won').length,
+    revenue: leads
+      .filter((l) => l.status === 'Won')
+      .reduce((sum, l) => sum + Number(l.value || 0), 0),
+  }), [leads]);
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <h1 className="text-3xl font-bold">Swirsky Roofing CRM</h1>
+        <p className="text-gray-600">Browser-safe canvas preview + Next.js/Vercel compatible</p>
+
+        {!supabase && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-xl">
+            Demo mode: add your NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel to enable cloud sync.
+          </div>
+        )}
+
+        {error && <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl">{error}</div>}
+
+        <div className="grid md:grid-cols-3 gap-4">
+          <StatCard label="Total Leads" value={totals.total} />
+          <StatCard label="Jobs Won" value={totals.won} />
+          <StatCard label="Revenue" value={`$${totals.revenue.toLocaleString()}`} />
+        </div>
+
+        <div className="bg-white rounded-2xl shadow p-6 grid md:grid-cols-3 gap-3">
+          {Object.entries(lead)
+            .filter(([k]) => k !== 'notes' && k !== 'id')
+            .map(([key, value]) => (
+              <input
+                key={key}
+                className="border rounded-xl p-3"
+                placeholder={key}
+                value={String(value)}
+                onChange={(e) => setLead((prev) => ({ ...prev, [key]: e.target.value }))}
+              />
+            ))}
+          <textarea
+            className="border rounded-xl p-3 md:col-span-3"
+            placeholder="Notes"
+            value={lead.notes}
+            onChange={(e) => setLead((prev) => ({ ...prev, notes: e.target.value }))}
+          />
+          <button onClick={addLead} className="bg-black text-white rounded-xl p-3 md:col-span-3">
+            Add Lead
+          </button>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow overflow-hidden">
+          {loading ? (
+            <div className="p-6">Loading...</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="p-3 text-left">Name</th>
+                  <th className="p-3 text-left">Phone</th>
+                  <th className="p-3 text-left">Source</th>
+                  <th className="p-3 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leads.map((l, idx) => (
+                  <tr key={l.id ?? idx} className="border-t">
+                    <td className="p-3">{l.name}</td>
+                    <td className="p-3">{l.phone}</td>
+                    <td className="p-3">{l.source}</td>
+                    <td className="p-3">{l.status}</td>
+                  </tr>
+                ))}
+                {leads.length === 0 && (
+                  <tr>
+                    <td className="p-3 text-gray-500" colSpan={4}>No leads yet</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="bg-white rounded-2xl shadow p-4">
+      <div className="text-sm text-gray-500">{label}</div>
+      <div className="text-2xl font-bold">{value}</div>
+    </div>
+  );
+}
