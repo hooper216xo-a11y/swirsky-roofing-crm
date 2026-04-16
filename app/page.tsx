@@ -3,6 +3,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
+type CreditStatus = 'Pending Credit' | 'Approved Credit' | 'Paid' | 'Disputed';
+
 type Lead = {
   id?: number;
   date: string;
@@ -14,17 +16,17 @@ type Lead = {
   status: string;
   value: string;
   notes: string;
+  trackingNumber: string;
+  originalMessage: string;
+  assignedTo: string;
+  commissionRate: string;
+  commissionAmount: string;
+  creditStatus: CreditStatus;
 };
 
-const env =
-  typeof globalThis !== 'undefined'
-    ? (globalThis as any).process?.env ?? {}
-    : {};
-
-const supabaseUrl =
-  env.NEXT_PUBLIC_SUPABASE_URL || 'https://YOUR_PROJECT.supabase.co';
-const supabaseAnonKey =
-  env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY';
+const env = typeof globalThis !== 'undefined' ? (globalThis as any).process?.env ?? {} : {};
+const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL || 'https://YOUR_PROJECT.supabase.co';
+const supabaseAnonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY';
 
 const hasValidSupabaseConfig =
   supabaseUrl !== 'https://YOUR_PROJECT.supabase.co' &&
@@ -34,15 +36,9 @@ const supabase: SupabaseClient | null = hasValidSupabaseConfig
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
-const SERVICES = [
-  'Roof Repair',
-  'Full Replacement',
-  'Inspection',
-  'Gutters',
-  'Siding',
-];
-
+const SERVICES = ['Roof Repair', 'Full Replacement', 'Inspection', 'Gutters', 'Siding'];
 const STATUSES = ['New', 'Quoted', 'Won', 'Lost'];
+const CREDIT_STATUSES: CreditStatus[] = ['Pending Credit', 'Approved Credit', 'Paid', 'Disputed'];
 
 export default function Page() {
   const createEmptyLead = (): Lead => ({
@@ -55,6 +51,12 @@ export default function Page() {
     status: 'New',
     value: '',
     notes: '',
+    trackingNumber: '(330) FB-ROOF',
+    originalMessage: '',
+    assignedTo: 'Office',
+    commissionRate: '10',
+    commissionAmount: '',
+    creditStatus: 'Pending Credit',
   });
 
   const [lead, setLead] = useState<Lead>(createEmptyLead());
@@ -66,36 +68,23 @@ export default function Page() {
     if (!supabase) return;
     setLoading(true);
     setError('');
-
-    const { data, error } = await supabase
-      .from('leads')
-      .select('*')
-      .order('date', { ascending: false });
-
+    const { data, error } = await supabase.from('leads').select('*').order('date', { ascending: false });
     if (error) {
       setError(error.message);
       setLeads([]);
     } else {
       setLeads((data as Lead[]) || []);
     }
-
     setLoading(false);
   };
 
   useEffect(() => {
     if (!supabase) return;
-
     loadLeads();
-
     const channel = supabase
       .channel('lead-updates')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'leads' },
-        loadLeads
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeads)
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
@@ -107,15 +96,19 @@ export default function Page() {
       return;
     }
 
+    const jobValue = Number(lead.value || 0);
+    const commissionRate = Number(lead.commissionRate || 0);
+    const commissionAmount = ((jobValue * commissionRate) / 100).toFixed(2);
+    const payload = { ...lead, commissionAmount };
+
     if (!supabase) {
-      setLeads((prev) => [{ ...lead, id: Date.now() }, ...prev]);
+      setLeads((prev) => [{ ...payload, id: Date.now() }, ...prev]);
       setLead(createEmptyLead());
       setError('');
       return;
     }
 
-    const { error } = await supabase.from('leads').insert([lead]);
-
+    const { error } = await supabase.from('leads').insert([payload]);
     if (error) {
       setError(error.message);
       return;
@@ -140,161 +133,83 @@ export default function Page() {
   return (
     <div className="min-h-screen bg-slate-100 p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h1 className="text-3xl font-bold tracking-tight">
-            Swirsky Roofing CRM
-          </h1>
-          <p className="mt-2 text-slate-600">
-            Track every Facebook Organic lead, estimate, and closed roofing job.
-          </p>
+        <div className="rounded-3xl bg-white p-6 shadow-sm border border-slate-200">
+          <h1 className="text-3xl font-bold tracking-tight">Swirsky Roofing CRM</h1>
+          <p className="mt-2 text-slate-600">Track every Facebook Organic lead, estimate, and closed roofing job.</p>
         </div>
-
-        {!supabase && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-800">
-            Demo mode active — add your Vercel Supabase environment keys before
-            going live.
-          </div>
-        )}
-
-        {error && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
-            {error}
-          </div>
-        )}
 
         <div className="grid gap-4 md:grid-cols-3">
           <StatCard label="Total Leads" value={totals.total} />
           <StatCard label="Jobs Won" value={totals.won} />
-          <StatCard
-            label="Revenue Closed"
-            value={`$${totals.revenue.toLocaleString()}`}
-          />
+          <StatCard label="Revenue Closed" value={`$${totals.revenue.toLocaleString()}`} />
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+          <div className="rounded-3xl bg-white p-6 shadow-sm border border-slate-200 space-y-4">
             <h2 className="text-xl font-semibold">Add New Lead</h2>
-
-            <input
-              className="w-full rounded-xl border p-3"
-              placeholder="Homeowner name"
-              value={lead.name}
-              onChange={(e) =>
-                setLead((p) => ({ ...p, name: e.target.value }))
-              }
-            />
-
-            <input
-              className="w-full rounded-xl border p-3"
-              placeholder="Phone number"
-              value={lead.phone}
-              onChange={(e) =>
-                setLead((p) => ({ ...p, phone: e.target.value }))
-              }
-            />
-
-            <input
-              className="w-full rounded-xl border p-3"
-              placeholder="City"
-              value={lead.city}
-              onChange={(e) =>
-                setLead((p) => ({ ...p, city: e.target.value }))
-              }
-            />
+            <input className="w-full rounded-xl border p-3" placeholder="Homeowner name" value={lead.name} onChange={(e) => setLead((p) => ({ ...p, name: e.target.value }))} />
+            <input className="w-full rounded-xl border p-3" placeholder="Phone number" value={lead.phone} onChange={(e) => setLead((p) => ({ ...p, phone: e.target.value }))} />
+            <input className="w-full rounded-xl border p-3" placeholder="City" value={lead.city} onChange={(e) => setLead((p) => ({ ...p, city: e.target.value }))} />
+            <input className="w-full rounded-xl border p-3" placeholder="Facebook tracking number" value={lead.trackingNumber} onChange={(e) => setLead((p) => ({ ...p, trackingNumber: e.target.value }))} />
 
             <div className="grid grid-cols-2 gap-3">
-              <select
-                className="rounded-xl border p-3"
-                value={lead.service}
-                onChange={(e) =>
-                  setLead((p) => ({ ...p, service: e.target.value }))
-                }
-              >
-                {SERVICES.map((s) => (
-                  <option key={s}>{s}</option>
-                ))}
+              <select className="rounded-xl border p-3" value={lead.service} onChange={(e) => setLead((p) => ({ ...p, service: e.target.value }))}>
+                {SERVICES.map((s) => <option key={s}>{s}</option>)}
               </select>
-
-              <select
-                className="rounded-xl border p-3"
-                value={lead.status}
-                onChange={(e) =>
-                  setLead((p) => ({ ...p, status: e.target.value }))
-                }
-              >
-                {STATUSES.map((s) => (
-                  <option key={s}>{s}</option>
-                ))}
+              <select className="rounded-xl border p-3" value={lead.status} onChange={(e) => setLead((p) => ({ ...p, status: e.target.value }))}>
+                {STATUSES.map((s) => <option key={s}>{s}</option>)}
               </select>
             </div>
 
-            <input
-              className="w-full rounded-xl border p-3"
-              placeholder="Job value ($)"
-              value={lead.value}
-              onChange={(e) =>
-                setLead((p) => ({ ...p, value: e.target.value }))
-              }
-            />
+            <input className="w-full rounded-xl border p-3" placeholder="Job value ($)" value={lead.value} onChange={(e) => setLead((p) => ({ ...p, value: e.target.value }))} />
+            <textarea className="w-full rounded-xl border p-3 min-h-24" placeholder="Original Facebook message proof" value={lead.originalMessage} onChange={(e) => setLead((p) => ({ ...p, originalMessage: e.target.value }))} />
+            <textarea className="w-full rounded-xl border p-3 min-h-24" placeholder="Notes from Facebook conversation / call" value={lead.notes} onChange={(e) => setLead((p) => ({ ...p, notes: e.target.value }))} />
 
-            <textarea
-              className="w-full rounded-xl border p-3 min-h-28"
-              placeholder="Notes from Facebook conversation / call"
-              value={lead.notes}
-              onChange={(e) =>
-                setLead((p) => ({ ...p, notes: e.target.value }))
-              }
-            />
+            <div className="grid grid-cols-2 gap-3">
+              <input className="rounded-xl border p-3" placeholder="Assigned rep" value={lead.assignedTo} onChange={(e) => setLead((p) => ({ ...p, assignedTo: e.target.value }))} />
+              <input className="rounded-xl border p-3" placeholder="Commission %" value={lead.commissionRate} onChange={(e) => setLead((p) => ({ ...p, commissionRate: e.target.value }))} />
+            </div>
 
-            <button
-              onClick={addLead}
-              className="w-full rounded-xl bg-black px-4 py-3 font-medium text-white hover:opacity-90"
-            >
+            <button onClick={addLead} className="w-full rounded-xl bg-black px-4 py-3 font-medium text-white hover:opacity-90">
               Save Facebook Lead
             </button>
           </div>
 
-          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b p-4 font-semibold">Recent Leads</div>
-
+          <div className="overflow-hidden rounded-3xl bg-white shadow-sm border border-slate-200">
+            <div className="border-b p-4 font-semibold">Recent Leads + Commission Proof</div>
             {loading ? (
               <div className="p-6">Loading leads...</div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-slate-600">
-                  <tr>
-                    <th className="p-3 text-left">Name</th>
-                    <th className="p-3 text-left">Phone</th>
-                    <th className="p-3 text-left">City</th>
-                    <th className="p-3 text-left">Service</th>
-                    <th className="p-3 text-left">Status</th>
-                    <th className="p-3 text-left">Value</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {leads.map((l, idx) => (
-                    <tr key={l.id ?? idx} className="border-t">
-                      <td className="p-3 font-medium">{l.name}</td>
-                      <td className="p-3">{l.phone}</td>
-                      <td className="p-3">{l.city}</td>
-                      <td className="p-3">{l.service}</td>
-                      <td className="p-3">{l.status}</td>
-                      <td className="p-3">
-                        ${Number(l.value || 0).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-
-                  {leads.length === 0 && (
-                    <tr>
-                      <td className="p-6 text-slate-500" colSpan={6}>
-                        No Facebook leads yet
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+              <div className="divide-y">
+                {leads.map((l, idx) => (
+                  <div key={l.id ?? idx} className="p-4">
+                    <div className="grid grid-cols-6 gap-3 text-sm">
+                      <div><div className="text-slate-500">Name</div><div className="font-semibold">{l.name}</div></div>
+                      <div><div className="text-slate-500">Phone</div><div>{l.phone}</div></div>
+                      <div><div className="text-slate-500">Service</div><div>{l.service}</div></div>
+                      <div><div className="text-slate-500">Status</div><div>{l.status}</div></div>
+                      <div><div className="text-slate-500">Job</div><div>${Number(l.value || 0).toLocaleString()}</div></div>
+                      <div><div className="text-slate-500">Commission</div><div className="font-semibold text-emerald-600">${Number(l.commissionAmount || 0).toLocaleString()}</div></div>
+                    </div>
+                    <div className="mt-4 rounded-2xl bg-slate-50 p-4 border border-slate-200">
+                      <div className="text-sm font-semibold mb-2">Commission Proof Panel</div>
+                      <div className="grid md:grid-cols-2 gap-3 text-sm">
+                        <div><span className="text-slate-500">Tracking #:</span> {l.trackingNumber}</div>
+                        <div><span className="text-slate-500">Assigned:</span> {l.assignedTo}</div>
+                        <div><span className="text-slate-500">Credit:</span> {l.creditStatus}</div>
+                        <div><span className="text-slate-500">Source:</span> {l.source}</div>
+                      </div>
+                      {l.originalMessage && (
+                        <div className="mt-3 text-sm">
+                          <div className="text-slate-500">Original FB Message</div>
+                          <div className="mt-1 rounded-xl bg-white p-3 border">{l.originalMessage}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {leads.length === 0 && <div className="p-6 text-slate-500">No Facebook leads yet</div>}
+              </div>
             )}
           </div>
         </div>
@@ -303,13 +218,7 @@ export default function Page() {
   );
 }
 
-function StatCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
+function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="text-sm text-slate-500">{label}</div>
